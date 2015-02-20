@@ -42,16 +42,18 @@ module FakeS3
   end
 
   class Servlet < WEBrick::HTTPServlet::AbstractServlet
-    def initialize(server,store,hostname)
+    def initialize(server,store,hostname,origin)
       super(server)
       @store = store
       @hostname = hostname
+      @origin = origin
       @port = server.config[:Port]
       @root_hostnames = [hostname,'localhost','s3.amazonaws.com','s3.localhost']
     end
 
     def do_GET(request, response)
       s_req = normalize_request(request)
+      add_cors_headers(request,response)
 
       case s_req.type
       when 'LIST_BUCKETS'
@@ -113,7 +115,6 @@ module FakeS3
         response.header['ETag'] = "\"#{real_obj.md5}\""
         response['Accept-Ranges'] = "bytes"
         response['Last-Ranges'] = "bytes"
-        response['Access-Control-Allow-Origin'] = '*'
 
         real_obj.custom_metadata.each do |header, value|
           response.header['x-amz-meta-' + header] = value
@@ -153,11 +154,11 @@ module FakeS3
 
     def do_PUT(request,response)
       s_req = normalize_request(request)
+      add_cors_headers(request,response)
 
       response.status = 200
       response.body = ""
       response['Content-Type'] = "text/xml"
-      response['Access-Control-Allow-Origin'] = '*'
 
       case s_req.type
       when Request::COPY
@@ -183,6 +184,8 @@ module FakeS3
         raise WEBrick::HTTPStatus::BadRequest
       end
       s_req = normalize_request(request)
+      add_cors_headers(request,response)
+
       key=request.query['key']
       success_action_redirect=request.query['success_action_redirect']
       success_action_status=request.query['success_action_status']
@@ -214,11 +217,11 @@ module FakeS3
         end
       end
       response['Content-Type'] = 'text/xml'
-      response['Access-Control-Allow-Origin'] = '*'
     end
 
     def do_DELETE(request,response)
       s_req = normalize_request(request)
+      add_cors_headers(request,response)
 
       case s_req.type
       when Request::DELETE_OBJECT
@@ -234,10 +237,7 @@ module FakeS3
 
     def do_OPTIONS(request, response)
       super
-      response["Access-Control-Allow-Origin"] = "*"
-      response["Access-Control-Allow-Methods"] = "HEAD, GET, PUT, POST"
-      response["Access-Control-Allow-Headers"] = "accept, content-type"
-      response["Access-Control-Expose-Headers"] = "ETag, x-amz-meta-custom-header"
+      add_cors_headers(request,response)
     end
 
     private
@@ -391,13 +391,21 @@ module FakeS3
       end
       puts "----------End Dump -------------"
     end
+
+    def add_cors_headers(request,response)
+      response["Access-Control-Allow-Origin"] = "#{@origin}"
+      response["Access-Control-Allow-Methods"] = "HEAD, GET, PUT, POST, OPTIONS"
+      response["Access-Control-Allow-Headers"] = "x-csrf-token, x-requested-with, x-amz-request-id, content-type, content-range, content-disposition, content-description"
+      response["Access-Control-Allow-Credentials"] = "true"
+    end
   end
 
 
   class Server
-    def initialize(address,port,store,hostname,ssl_cert_path,ssl_key_path)
+    def initialize(address,port,origin,store,hostname,ssl_cert_path,ssl_key_path)
       @address = address
       @port = port
+      @origin = origin
       @store = store
       @hostname = hostname
       @ssl_cert_path = ssl_cert_path
@@ -419,7 +427,7 @@ module FakeS3
     end
 
     def serve
-      @server.mount "/", Servlet, @store,@hostname
+      @server.mount "/", Servlet, @store,@hostname,@origin
       trap "INT" do @server.shutdown end
       @server.start
     end
